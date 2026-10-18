@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>连接 ATRI 服务器</title>
+<style>
+  :root { --bg: #ecebe7; --card: #f8f7f4; --fg: #2a2926; --muted: #6f6c66; --line: #d8d5ce; --accent: #4f6688; --err: #b4483f; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1d1e21; --card: #26272b; --fg: #e8e6e1; --muted: #a29f98; --line: #3a3b40; --accent: #9db1d3; --err: #e07a70; color-scheme: dark; } }
+  body { margin: 0; padding: 22px; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, "Microsoft YaHei", "PingFang SC", sans-serif; }
+  h1 { margin: 0 0 6px; font-size: 18px; }
+  p { margin: 0 0 14px; color: var(--muted); }
+  form { display: grid; gap: 10px; }
+  input { padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; }
+  input:focus { outline: 2px solid var(--accent); }
+  button { justify-self: start; padding: 7px 18px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .error { min-height: 1.6em; color: var(--err); margin: 0; }
+</style>
+</head>
+<body>
+  <h1>连接 ATRI 服务器</h1>
+  <p>填你的 ATRI 网站地址（比如 https://atri.example.com）。聊天和形象都在服务器上，下一步会让你登录一次。</p>
+  <form id="form">
+    <input id="url" type="url" required placeholder="https://" aria-label="服务器地址" autofocus>
+    <p class="error" id="error" role="alert"></p>
+    <button id="save" type="submit">连接</button>
+  </form>
+<script>
+  const $ = (id) => document.getElementById(id);
+  window.atriSetup.current().then((url) => { if (url) $("url").value = url; });
+  $("form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    $("save").disabled = true;
+    $("save").textContent = "正在连接……";
+    $("error").textContent = "";
+    const result = await window.atriSetup.save($("url").value);
+    if (!result.ok) {
+      $("error").textContent = result.message;
+      $("save").disabled = false;
+      $("save").textContent = "连接";
+    }
+  });
+</script>
+</body>
+</html>

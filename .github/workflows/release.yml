@@ -1,0 +1,44 @@
+# 每次推送都在 Windows 机器上跑冒烟测试；推一个 v 开头的标签（和 package.json 里的版本一样，比如 v0.1.0），
+# 测试过了就打安装包，发到这个仓库的 GitHub Release。装好的应用从这里检查更新（electron-updater 读 Release 里的 latest.yml）。
+name: 测试和发布
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 冒烟测试（启动应用，走一遍登录、桌宠窗口、拖动、点透）
+        run: npm test
+
+  windows:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 版本号要和标签一致
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - run: npm ci
+      - name: 打包并发布
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

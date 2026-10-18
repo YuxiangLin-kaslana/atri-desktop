@@ -1,0 +1,61 @@
+{
+  "name": "atri-desktop",
+  "productName": "ATRI",
+  "version": "0.1.0",
+  "description": "ATRI 桌宠：把 ATRI 服务器上的桌宠页放进透明的置顶窗口，聊天、记忆、模型运算都在服务器上",
+  "main": "src/main.js",
+  "author": "Yuxiang Lin",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always",
+    "test": "node tests/smoke.js"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "electron": "43.7.7",
+    "electron-builder": "26.15.3",
+    "playwright-core": "1.63.0"
+  },
+  "build": {
+    "appId": "io.github.yuxianglin-kaslana.atri-desktop",
+    "productName": "ATRI",
+    "copyright": "ATRI",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/assets/icon.png",
+      "artifactName": "ATRI-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "ATRI",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "YuxiangLin-kaslana",
+        "repo": "atri-desktop",
+        "releaseType": "release"
+      }
+    ]
+  }
+}
