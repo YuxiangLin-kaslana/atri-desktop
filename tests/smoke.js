@@ -67,7 +67,13 @@ async function waitFor(check, what, timeout = 20000) {
     // 1. 没登录：桌宠页被转到登录页，弹出登录窗口
     const login = await waitFor(async () => (await windows()).find((win) => win.url.includes("/atri/login") && win.visible), "登录窗口");
     console.log("登录窗口：", login.url);
-    const loginPage = await waitFor(() => app.windows().find((page) => page.url().includes("/atri/login")), "登录页");
+    // 没登录时隐藏的桌宠窗口里也停着登录页：找看得见的那个
+    const loginPage = await waitFor(async () => {
+      for (const page of app.windows()) {
+        if (!page.isClosed() && page.url().includes("/atri/login") && await (await app.browserWindow(page)).evaluate((win) => win.isVisible())) return page;
+      }
+      return null;
+    }, "登录页");
     await loginPage.click("#login");
 
     // 2. 登录后：登录窗口关掉，透明桌宠窗口重新打开桌宠页
