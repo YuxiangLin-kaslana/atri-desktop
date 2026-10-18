@@ -38,7 +38,15 @@ jobs:
         shell: bash
         run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
       - run: npm ci
-      - name: 打包并发布
-        run: npx electron-builder --win --publish always
+      # 只打包（会在 dist/ 生成安装包、blockmap 和自动更新要读的 latest.yml），上传交给 gh，一次传齐
+      - name: 打包
+        run: npx electron-builder --win --publish never
+      - name: 发到 Release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/ATRI-Setup-*.exe dist/ATRI-Setup-*.exe.blockmap dist/latest.yml \
+            --title "ATRI ${GITHUB_REF_NAME}" \
+            --notes "Windows 安装包：下载 ATRI-Setup-${GITHUB_REF_NAME#v}.exe，双击安装。第一次打开填你的 ATRI 网站地址，再登录一次；以后有新版本会自己更新。"
