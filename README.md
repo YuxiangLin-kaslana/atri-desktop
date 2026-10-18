@@ -10,7 +10,7 @@ ATRI 的桌宠：她站在你的桌面上，点一下会有反应，双击就能
 在 [Releases](https://github.com/YuxiangLin-kaslana/atri-desktop/releases) 下载 `ATRI-Setup-x.y.z.exe`，双击安装（只支持 Windows）。
 安装包没有代码签名，第一次运行时 Windows 可能提示“已保护你的电脑”，点“更多信息”→“仍要运行”。
 
-第一次打开会让你填 ATRI 服务器地址，然后登录一次（和网页版同一个账号）。
+第一次打开会让你登录一次（和网页版同一个账号）。默认连 https://atri.yuxianglin.xyz；要连别的 ATRI 服务器，在托盘菜单“服务器地址…”里改。
 
 ## 怎么用
 

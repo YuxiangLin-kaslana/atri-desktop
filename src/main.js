@@ -1,4 +1,4 @@
-// ATRI 桌宠的主进程。它只是个外壳：把 ATRI 服务器上的桌宠页（/atri/pet）放进一个透明、没边框、总在最前的小窗口，
+// ATRI 桌宠的主进程。它只是个外壳：把 ATRI 服务器（默认 DEFAULT_SERVER）上的桌宠页（/atri/pet）放进一个透明、没边框、总在最前的小窗口，
 // 再管点透、拖动、托盘菜单、开机启动和自动更新。聊天、记忆、形象模型都在服务器上，这里不存任何密钥。
 const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, net, screen, shell } = require("electron");
 const fs = require("node:fs");
@@ -9,7 +9,8 @@ const PARTITION = "persist:atri";  // 桌宠、聊天、登录窗口共用一份
 const SIZES = { small: { label: "小", width: 280, height: 470 }, medium: { label: "中", width: 360, height: 600 }, large: { label: "大", width: 460, height: 770 } };
 const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
 const ICON = path.join(__dirname, "assets", "icon.png");
-const DEFAULTS = { server: "", size: "medium", position: null, alwaysOnTop: true, model: null };
+const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
+const DEFAULTS = { server: DEFAULT_SERVER, size: "medium", position: null, alwaysOnTop: true, model: null };
 
 let settings = { ...DEFAULTS };
 let pet = null, chat = null, login = null, setup = null, tray = null;
@@ -20,6 +21,7 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 function loadSettings() {
   try { settings = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile(), "utf8")) }; } catch { settings = { ...DEFAULTS }; }
   if (!SIZES[settings.size]) settings.size = "medium";
+  if (!settings.server) settings.server = DEFAULT_SERVER;
 }
 function saveSettings() {
   try { fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)); } catch (error) { log("settings", error); }
