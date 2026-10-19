@@ -1,7 +1,7 @@
 {
   "name": "atri-desktop",
   "productName": "ATRI",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "ATRI 桌宠：把 ATRI 服务器上的桌宠页放进透明的置顶窗口，聊天、记忆、模型运算都在服务器上",
   "main": "src/main.js",
   "author": "Yuxiang Lin",

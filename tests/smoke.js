@@ -1,6 +1,6 @@
 // 冒烟测试：起一个假的 ATRI 服务器，用 Playwright 启动这个应用，确认外壳的几件事都对：
 // 读设置、没登录先弹登录窗口、登录后打开透明桌宠窗口、页面拿得到 atriDesktop 拿不到 Node、
-// 鼠标位置传得进去、拖动能挪窗口、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了、语音开关、摄像头不给。
+// 鼠标位置传得进去、拖动能挪窗口、滚轮能放大缩小、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了、语音开关、摄像头不给。
 // 用法：npm test（要能开窗口：Windows、macOS，或者 Linux 上有 X）
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -59,7 +59,7 @@ async function waitFor(check, what, timeout = 20000) {
   const address = `http://127.0.0.1:${server.address().port}`;
   // 用户目录放到临时目录（ATRI_USER_DATA），里面先写好服务器地址
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "atri-smoke-"));
-  fs.writeFileSync(path.join(home, "settings.json"), JSON.stringify({ server: address, size: "medium" }));
+  fs.writeFileSync(path.join(home, "settings.json"), JSON.stringify({ server: address, size: "medium" }));  // 旧版本存的 size 也认
   const app = await electron.launch({ args: [path.join(__dirname, "..")], env: { ...process.env, ATRI_USER_DATA: home, ATRI_SMOKE: "1" } });
   const windows = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => ({
     id: win.id, url: win.webContents.getURL(), visible: win.isVisible(), bounds: win.getBounds(), onTop: win.isAlwaysOnTop(),
@@ -102,6 +102,27 @@ async function waitFor(check, what, timeout = 20000) {
     console.log("拖动后：", JSON.stringify(moved.bounds));
     const saved = JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8"));
     assert.deepEqual(saved.position, { x: moved.bounds.x, y: moved.bounds.y });
+
+    // 5b. 滚轮放大：宽高按比例变大，脚底不动、左右居中；存进设置。按住拖（dragStart / dragEnd）不出错、窗口大小不变
+    const before = (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds;
+    await pet.evaluate(() => window.atriDesktop.zoom(1));
+    const bigger = await waitFor(async () => {
+      const now = (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds;
+      return now.width > before.width && now;
+    }, "放大");
+    assert.equal(bigger.width, Math.round(360 * 1.08));
+    assert.equal(bigger.y + bigger.height, before.y + before.height);
+    assert.ok(Math.abs((bigger.x + bigger.width / 2) - (before.x + before.width / 2)) <= 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).scale, 1.08);
+    await pet.evaluate(() => window.atriDesktop.zoom(-1));
+    await waitFor(async () => (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds.width === 360, "缩回去");
+    await pet.evaluate(() => window.atriDesktop.dragStart());
+    await new Promise((done) => setTimeout(done, 200));
+    await pet.evaluate(() => window.atriDesktop.dragEnd());
+    const dragged = (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds;
+    assert.equal(dragged.width, 360);
+    assert.equal(dragged.height, 600);
+    console.log("缩放、拖动：", JSON.stringify(bigger), JSON.stringify(dragged));
 
     // 6. 去别的网站：拦下，还在桌宠页
     await pet.evaluate(() => { location.href = "https://example.com/"; }).catch(() => {});

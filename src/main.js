@@ -8,16 +8,21 @@ const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
 
 const PARTITION = "persist:atri";  // 桌宠、聊天、登录窗口共用一份 cookie（登录一次就行）
-const SIZES = { small: { label: "小", width: 280, height: 470 }, medium: { label: "中", width: 360, height: 600 }, large: { label: "大", width: 460, height: 770 } };
+// 大小：中号 360×600 乘一个比例；在她身上滚滚轮随意调（0.5～2.5 倍），菜单里有几档常用的
+const BASE = { width: 360, height: 600 };
+const SCALES = { small: { label: "小", scale: 0.78 }, medium: { label: "中", scale: 1 }, large: { label: "大", scale: 1.28 }, huge: { label: "特大", scale: 1.6 } };
+const MIN_SCALE = 0.5, MAX_SCALE = 2.5, ZOOM_STEP = 1.08;
+const clampScale = (scale) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(scale) || 1));
+const sizeOf = (scale) => ({ width: Math.round(BASE.width * scale), height: Math.round(BASE.height * scale) });
 const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
 const ICON = path.join(__dirname, "assets", "icon.png");
 const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
-const DEFAULTS = { server: DEFAULT_SERVER, size: "medium", position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
+const DEFAULTS = { server: DEFAULT_SERVER, scale: 1, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
 const SHOT_WIDTH = 1280;  // 截图缩到这么宽再给页面（够她看清，传得也快）
 
 let settings = { ...DEFAULTS };
 let pet = null, chat = null, login = null, setup = null, tray = null;
-let models = [], updateReady = null, cursorTimer = null;
+let models = [], updateReady = null, cursorTimer = null, dragTimer = null;
 let watching = false, locked = false;  // 让她看屏幕（不存进设置，每次启动都是关的）；锁屏时不截
 let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是关的）
 
@@ -25,7 +30,9 @@ let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是�
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 function loadSettings() {
   try { settings = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile(), "utf8")) }; } catch { settings = { ...DEFAULTS }; }
-  if (!SIZES[settings.size]) settings.size = "medium";
+  if (typeof settings.scale !== "number") settings.scale = SCALES[settings.size]?.scale || 1;  // 0.1.4 以前存的是 small / medium / large
+  delete settings.size;
+  settings.scale = clampScale(settings.scale);
   if (!settings.server) settings.server = DEFAULT_SERVER;
 }
 function saveSettings() {
@@ -65,7 +72,7 @@ function onScreen(position, size) {
     position.x + size.width / 2 >= a.x && position.x + size.width / 2 <= a.x + a.width && position.y + 40 >= a.y && position.y + 40 <= a.y + a.height);
 }
 function createPet() {
-  const size = SIZES[settings.size];
+  const size = sizeOf(settings.scale);
   const position = settings.position && onScreen(settings.position, size) ? settings.position : defaultPosition(size);
   pet = new BrowserWindow({
     width: size.width, height: size.height, x: position.x, y: position.y,
@@ -102,13 +109,30 @@ function createPet() {
     pet.webContents.send("atri:cursor", { x: point.x - box.x, y: point.y - box.y });
   }, 60);
 }
-function resizePet(size) {
-  settings.size = size;
+function resizePet(scale) {
+  settings.scale = clampScale(scale);
   saveSettings();
   if (!pet) return;
-  const box = pet.getBounds(), next = SIZES[size];
+  const box = pet.getBounds(), next = sizeOf(settings.scale);
   // 脚底不动：往上长、往左右两边长
   pet.setBounds({ x: Math.round(box.x + (box.width - next.width) / 2), y: box.y + box.height - next.height, width: next.width, height: next.height });
+  rememberPosition();
+  refreshTray();
+}
+// 拖她：按住拖动时由这里跟着屏幕上的鼠标挪窗口（比页面一步步传位移稳，高 DPI 下也不会越拖越大）；松手或两分钟后停
+function startDrag() {
+  const start = screen.getCursorScreenPoint(), box = pet.getBounds(), began = Date.now();
+  const offset = { x: start.x - box.x, y: start.y - box.y }, size = { width: box.width, height: box.height };
+  clearInterval(dragTimer);
+  dragTimer = setInterval(() => {
+    if (!pet || pet.isDestroyed() || Date.now() - began > 120000) return stopDrag();
+    const point = screen.getCursorScreenPoint();
+    pet.setBounds({ x: point.x - offset.x, y: point.y - offset.y, ...size });
+  }, 16);
+}
+function stopDrag() {
+  clearInterval(dragTimer);
+  dragTimer = null;
   rememberPosition();
 }
 function rememberPosition() {
@@ -173,12 +197,16 @@ function openSetup() {
 // ---- 页面发来的请求：只认桌宠窗口里、服务器那个来源的页面 ----
 const fromPet = (event) => pet && event.sender === pet.webContents && sameOrigin(event.senderFrame?.url || "");
 ipcMain.on("atri:ignore", (event, ignore) => { if (fromPet(event)) pet.setIgnoreMouseEvents(Boolean(ignore), { forward: true }); });
-ipcMain.on("atri:drag", (event, dx, dy) => {
+ipcMain.on("atri:drag", (event, dx, dy) => {  // 旧的桌宠页一步步传位移
   if (!fromPet(event)) return;
   const box = pet.getBounds();
-  pet.setPosition(Math.round(box.x + (Number(dx) || 0)), Math.round(box.y + (Number(dy) || 0)));
+  pet.setBounds({ x: Math.round(box.x + (Number(dx) || 0)), y: Math.round(box.y + (Number(dy) || 0)), width: box.width, height: box.height });
 });
-ipcMain.on("atri:dragEnd", (event) => { if (fromPet(event)) rememberPosition(); });
+ipcMain.on("atri:dragStart", (event) => { if (fromPet(event)) startDrag(); });
+ipcMain.on("atri:dragEnd", (event) => { if (fromPet(event)) stopDrag(); });
+ipcMain.on("atri:zoom", (event, direction) => {  // 在她身上滚滚轮：放大缩小
+  if (fromPet(event)) resizePet(settings.scale * (Number(direction) > 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+});
 ipcMain.on("atri:chat", (event) => { if (fromPet(event)) openChat(); });
 ipcMain.on("atri:menu", (event) => { if (fromPet(event)) Menu.buildFromTemplate(menuItems()).popup({ window: pet }); });
 ipcMain.on("atri:ready", (event, info) => {
@@ -291,7 +319,11 @@ function menuItems() {
     { label: "念出她的话", type: "checkbox", checked: settings.speak, click: (item) => setSpeak(item.checked) },
     { label: "让她看屏幕", type: "checkbox", checked: watching, click: (item) => setWatching(item.checked) },
     { type: "separator" },
-    { label: "大小", submenu: Object.entries(SIZES).map(([key, size]) => ({ label: size.label, type: "radio", checked: settings.size === key, click: () => resizePet(key) })) },
+    { label: "大小", submenu: [
+      ...Object.values(SCALES).map((size) => ({ label: size.label, type: "radio", checked: Math.abs(settings.scale - size.scale) < 0.01, click: () => resizePet(size.scale) })),
+      { type: "separator" },
+      { label: `现在 ${Math.round(settings.scale * 100)}%（在她身上滚动滚轮随意调）`, enabled: false },
+    ] },
   ];
   if (models.length) {
     items.push({ label: "换形象", submenu: models.map((model) => ({
@@ -385,7 +417,10 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.ATRI_SMOKE) {  // 冒烟测试用
       global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes }) };
     }
-    screen.on("display-removed", () => { if (pet && !onScreen(pet.getBounds(), SIZES[settings.size])) pet.setPosition(defaultPosition(SIZES[settings.size]).x, defaultPosition(SIZES[settings.size]).y); });
+    screen.on("display-removed", () => {
+      const size = sizeOf(settings.scale);
+      if (pet && !onScreen(pet.getBounds(), size)) pet.setBounds({ ...defaultPosition(size), ...size });
+    });
   });
   app.on("window-all-closed", () => {});  // 窗口都关了也留在托盘里
   app.on("will-quit", () => globalShortcut.unregisterAll());

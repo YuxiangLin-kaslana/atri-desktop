@@ -4,7 +4,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("atriDesktop", {
   setIgnoreMouse: (ignore) => ipcRenderer.send("atri:ignore", Boolean(ignore)),  // 鼠标点透到桌面
   dragBy: (dx, dy) => ipcRenderer.send("atri:drag", Number(dx) || 0, Number(dy) || 0),  // 拖她挪窗口
+  dragStart: () => ipcRenderer.send("atri:dragStart"),  // 按住她拖：桌面端跟着鼠标挪窗口，dragEnd 停
   dragEnd: () => ipcRenderer.send("atri:dragEnd"),
+  zoom: (direction) => ipcRenderer.send("atri:zoom", Number(direction) > 0 ? 1 : -1),  // 滚轮放大（1）缩小（-1）
   openChat: () => ipcRenderer.send("atri:chat"),
   menu: () => ipcRenderer.send("atri:menu"),  // 右键菜单
   ready: (info) => ipcRenderer.send("atri:ready", JSON.parse(JSON.stringify(info ?? {}))),  // 能换的形象
