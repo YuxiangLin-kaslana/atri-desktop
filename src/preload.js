@@ -10,4 +10,9 @@ contextBridge.exposeInMainWorld("atriDesktop", {
   ready: (info) => ipcRenderer.send("atri:ready", JSON.parse(JSON.stringify(info ?? {}))),  // 能换的形象
   onCursor: (handler) => ipcRenderer.on("atri:cursor", (_event, point) => handler(point)),  // 屏幕上的鼠标（相对窗口）
   onCommand: (handler) => ipcRenderer.on("atri:command", (_event, command) => handler(String(command))),  // 托盘、快捷键
+  idleSeconds: () => ipcRenderer.invoke("atri:idle"),  // 多久没动键盘鼠标了（判断人在不在电脑前）
+  // 看屏幕：只有用户在菜单里打开了才截得到；页面只能把它关掉，开不了
+  captureScreen: () => ipcRenderer.invoke("atri:capture"),  // JPEG（Uint8Array）
+  stopWatching: () => ipcRenderer.send("atri:stopWatching"),
+  onWatching: (handler) => ipcRenderer.on("atri:watching", (_event, on) => handler(Boolean(on))),
 });

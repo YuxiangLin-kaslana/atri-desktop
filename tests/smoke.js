@@ -1,6 +1,6 @@
 // 冒烟测试：起一个假的 ATRI 服务器，用 Playwright 启动这个应用，确认外壳的几件事都对：
 // 读设置、没登录先弹登录窗口、登录后打开透明桌宠窗口、页面拿得到 atriDesktop 拿不到 Node、
-// 鼠标位置传得进去、拖动能挪窗口、点透开关不报错、去别的网站会被拦下。
+// 鼠标位置传得进去、拖动能挪窗口、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了。
 // 用法：npm test（要能开窗口：Windows、macOS，或者 Linux 上有 X）
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -12,7 +12,8 @@ const { _electron: electron } = require("playwright-core");
 const PET = `<!doctype html><meta charset="utf-8"><title>桌宠</title>
 <body style="background:transparent">
 <script>
-  window.cursorCount = 0; window.commands = [];
+  window.cursorCount = 0; window.commands = []; window.watching = null;
+  window.atriDesktop.onWatching((on) => { window.watching = on; });
   window.atriDesktop.onCursor(() => { window.cursorCount++; });
   window.atriDesktop.onCommand((command) => window.commands.push(command));
   window.atriDesktop.ready({ models: [{ name: "Test", title: "测试形象" }], model: "Test" });
@@ -59,7 +60,7 @@ async function waitFor(check, what, timeout = 20000) {
   // 用户目录放到临时目录（ATRI_USER_DATA），里面先写好服务器地址
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "atri-smoke-"));
   fs.writeFileSync(path.join(home, "settings.json"), JSON.stringify({ server: address, size: "medium" }));
-  const app = await electron.launch({ args: [path.join(__dirname, "..")], env: { ...process.env, ATRI_USER_DATA: home } });
+  const app = await electron.launch({ args: [path.join(__dirname, "..")], env: { ...process.env, ATRI_USER_DATA: home, ATRI_SMOKE: "1" } });
   const windows = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((win) => ({
     id: win.id, url: win.webContents.getURL(), visible: win.isVisible(), bounds: win.getBounds(), onTop: win.isAlwaysOnTop(),
   })));
@@ -113,6 +114,22 @@ async function waitFor(check, what, timeout = 20000) {
       win.webContents.send("atri:command", "model:Test");
     });
     await waitFor(() => pet.evaluate(() => window.commands.includes("model:Test")), "托盘命令");
+
+    // 8. 看屏幕：默认关着，页面截不到；用户在菜单里打开后截得到 JPEG，页面知道在看；页面能关、关了又截不到
+    const tryShot = () => pet.evaluate(() => window.atriDesktop.captureScreen().then(
+      (jpeg) => ({ size: jpeg.length, head: [jpeg[0], jpeg[1]] }), (error) => ({ error: String(error.message || error) })));
+    assert.ok((await tryShot()).error, "没打开就不该截得到屏幕");
+    assert.equal(await pet.evaluate(() => typeof window.atriDesktop.stopWatching), "function");
+    assert.equal(await pet.evaluate(() => typeof window.atriDesktop.startWatching), "undefined");  // 页面开不了
+    assert.equal(typeof await pet.evaluate(() => window.atriDesktop.idleSeconds()), "number");
+    await app.evaluate(() => global.atriSmoke.setWatching(true));
+    await waitFor(() => pet.evaluate(() => window.watching === true), "页面知道在看屏幕");
+    const shot = await tryShot();
+    console.log("截图：", JSON.stringify(shot));
+    assert.ok(shot.size > 1000 && shot.head[0] === 0xff && shot.head[1] === 0xd8, `截图不对：${JSON.stringify(shot)}`);
+    await pet.evaluate(() => window.atriDesktop.stopWatching());
+    await waitFor(() => pet.evaluate(() => window.watching === false), "页面知道不看了");
+    assert.ok((await tryShot()).error, "关了就不该截得到屏幕");
     console.log("冒烟测试通过");
   } finally {
     await app.close().catch(() => {});

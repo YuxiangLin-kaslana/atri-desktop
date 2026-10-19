@@ -1,6 +1,7 @@
 // ATRI 桌宠的主进程。它只是个外壳：把 ATRI 服务器（默认 DEFAULT_SERVER）上的桌宠页（/atri/pet）放进一个透明、没边框、总在最前的小窗口，
 // 再管点透、拖动、托盘菜单、开机启动和自动更新。聊天、记忆、形象模型都在服务器上，这里不存任何密钥。
-const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, net, screen, shell } = require("electron");
+// “让她看屏幕”默认关着，只有用户在托盘或右键菜单里打开才截图（每次启动都是关的）；她只能看，没有操作键盘鼠标的能力。
+const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, screen, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
@@ -10,11 +11,13 @@ const SIZES = { small: { label: "小", width: 280, height: 470 }, medium: { labe
 const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
 const ICON = path.join(__dirname, "assets", "icon.png");
 const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
-const DEFAULTS = { server: DEFAULT_SERVER, size: "medium", position: null, alwaysOnTop: true, model: null };
+const DEFAULTS = { server: DEFAULT_SERVER, size: "medium", position: null, alwaysOnTop: true, model: null, watchAgreed: false };
+const SHOT_WIDTH = 1280;  // 截图缩到这么宽再给页面（够她看清，传得也快）
 
 let settings = { ...DEFAULTS };
 let pet = null, chat = null, login = null, setup = null, tray = null;
 let models = [], updateReady = null, cursorTimer = null;
+let watching = false, locked = false;  // 让她看屏幕（不存进设置，每次启动都是关的）；锁屏时不截
 
 // ---- 设置：存在用户目录的 settings.json ----
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -81,7 +84,7 @@ function createPet() {
   });
   pet.once("ready-to-show", () => { if (!isLogin(pet.webContents.getURL())) pet.showInactive(); });  // 被转到登录页时不显示
   pet.on("show", refreshTray);
-  pet.on("hide", refreshTray);
+  pet.on("hide", () => { refreshTray(); if (watching) setWatching(false); });  // 藏起来就看不到“在看屏幕”的标记了：一起关掉
   pet.on("closed", () => { pet = null; });
   pet.loadURL(`${origin()}/atri/pet`);
   // 视线：每隔一会儿把鼠标在屏幕上的位置（相对窗口）告诉页面，窗口外也跟着看
@@ -177,7 +180,14 @@ ipcMain.on("atri:ready", (event, info) => {
   settings.model = typeof info?.model === "string" ? info.model : settings.model;
   refreshTray();
   if (updateReady) pet.webContents.send("atri:command", `say:新版本 ${updateReady} 已经下好了，退出时会自动装上。`);
+  pet.webContents.send("atri:watching", watching);  // 页面重新加载过：告诉它现在看没看
 });
+ipcMain.handle("atri:capture", (event) => {
+  if (!fromPet(event)) throw new Error("不认识的请求");
+  return captureScreen();
+});
+ipcMain.on("atri:stopWatching", (event) => { if (fromPet(event)) setWatching(false); });  // 页面只能关，不能开
+ipcMain.handle("atri:idle", (event) => (fromPet(event) ? powerMonitor.getSystemIdleTime() : null));
 ipcMain.handle("atri:setup:current", (event) => (setup && event.sender === setup.webContents ? settings.server : ""));
 ipcMain.handle("atri:setup:save", async (event, raw) => {
   if (!setup || event.sender !== setup.webContents) return { ok: false, message: "不认识的请求" };
@@ -199,11 +209,42 @@ ipcMain.handle("atri:setup:save", async (event, raw) => {
   return { ok: true };
 });
 
+// ---- 让她看屏幕：用户打开才截图，桌宠页上一直挂着“在看屏幕”的标记，点它或在菜单里就能关 ----
+async function setWatching(on, { asked = true } = {}) {
+  if (on && asked && !settings.watchAgreed) {
+    const { response } = await dialog.showMessageBox({
+      type: "question", title: "让 ATRI 看屏幕", buttons: ["打开", "取消"], defaultId: 0, cancelId: 1,
+      message: "打开后，ATRI 每隔半分钟看一眼你的屏幕",
+      detail: "屏幕变了才把截图发到你的 ATRI 服务器给她看（服务器不保存截图）；你在桌宠里和她说话时，会附上当时的截图。\n"
+        + "她旁边会一直显示“在看屏幕”，点它或在菜单里取消勾选就关掉。锁屏时不看。\n她只能看，不能操作你的键盘和鼠标。",
+    });
+    if (response !== 0) return refreshTray();
+    settings.watchAgreed = true;
+    saveSettings();
+  }
+  watching = Boolean(on);
+  log("watching", watching);
+  refreshTray();
+  if (tray) tray.setToolTip(watching ? "ATRI（在看屏幕）" : "ATRI");
+  pet?.webContents.send("atri:watching", watching);
+}
+async function captureScreen() {
+  if (!watching || locked || !pet?.isVisible()) throw new Error("没在看屏幕");
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());  // 鼠标在哪块屏幕就看哪块
+  const { width, height } = display.size;
+  const size = { width: SHOT_WIDTH, height: Math.round(SHOT_WIDTH * height / width) };
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: size });
+  const source = sources.find((each) => each.display_id === String(display.id)) || sources[0];
+  if (!source || source.thumbnail.isEmpty()) throw new Error("截不到屏幕");
+  return new Uint8Array(source.thumbnail.toJPEG(70));
+}
+
 // ---- 托盘和右键菜单 ----
 function menuItems() {
   const items = [
     { label: "和她说话", accelerator: SHORTCUT, click: talk },
     { label: "打开聊天窗口", click: openChat },
+    { label: "让她看屏幕", type: "checkbox", checked: watching, click: (item) => setWatching(item.checked) },
     { type: "separator" },
     { label: "大小", submenu: Object.entries(SIZES).map(([key, size]) => ({ label: size.label, type: "radio", checked: settings.size === key, click: () => resizePet(key) })) },
   ];
@@ -293,6 +334,9 @@ if (!app.requestSingleInstanceLock()) {
     if (settings.server) createPet(); else openSetup();
     if (!globalShortcut.register(SHORTCUT, talk)) log("shortcut taken", SHORTCUT);
     setupUpdater();
+    powerMonitor.on("lock-screen", () => { locked = true; });
+    powerMonitor.on("unlock-screen", () => { locked = false; });
+    if (process.env.ATRI_SMOKE) global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }) };  // 冒烟测试用
     screen.on("display-removed", () => { if (pet && !onScreen(pet.getBounds(), SIZES[settings.size])) pet.setPosition(defaultPosition(SIZES[settings.size]).x, defaultPosition(SIZES[settings.size]).y); });
   });
   app.on("window-all-closed", () => {});  // 窗口都关了也留在托盘里
