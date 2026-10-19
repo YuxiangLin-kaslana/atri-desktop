@@ -49,4 +49,4 @@ jobs:
           ls -l dist
           gh release create "$GITHUB_REF_NAME" dist/ATRI-Setup-*.exe dist/ATRI-Setup-*.exe.blockmap dist/latest.yml \
             --title "ATRI ${GITHUB_REF_NAME}" \
-            --notes "Windows 安装包：下载 ATRI-Setup-${GITHUB_REF_NAME#v}.exe，双击安装。第一次打开填你的 ATRI 网站地址，再登录一次；以后有新版本会自己更新。"
+            --notes "Windows 安装包：下载 ATRI-Setup-${GITHUB_REF_NAME#v}.exe，双击安装。第一次打开登录一次（默认连 https://atri.yuxianglin.xyz）；以后有新版本会自己更新。"
