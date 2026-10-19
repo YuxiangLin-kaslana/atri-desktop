@@ -8,16 +8,17 @@ const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
 
 const PARTITION = "persist:atri";  // 桌宠、聊天、登录窗口共用一份 cookie（登录一次就行）
-// 大小：中号 360×600 乘一个比例；在她身上滚滚轮随意调（0.5～2.5 倍），菜单里有几档常用的
+// 大小：360×600 乘一个比例；在她身上滚滚轮随意调（0.4～2.5 倍），菜单里有几档常用的。默认 0.7（原来的 1 太大了）
 const BASE = { width: 360, height: 600 };
-const SCALES = { small: { label: "小", scale: 0.78 }, medium: { label: "中", scale: 1 }, large: { label: "大", scale: 1.28 }, huge: { label: "特大", scale: 1.6 } };
-const MIN_SCALE = 0.5, MAX_SCALE = 2.5, ZOOM_STEP = 1.08;
+const SCALES = { small: { label: "小", scale: 0.55 }, medium: { label: "中", scale: 0.7 }, large: { label: "大", scale: 0.9 }, huge: { label: "特大", scale: 1.2 } };
+const MIN_SCALE = 0.4, MAX_SCALE = 2.5, ZOOM_STEP = 1.08;
+const SIZE_LAYOUT = 2;  // 设置里的大小是第几版：1（0.1.5）的比例整体缩到 0.7
 const clampScale = (scale) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(scale) || 1));
 const sizeOf = (scale) => ({ width: Math.round(BASE.width * scale), height: Math.round(BASE.height * scale) });
 const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
 const ICON = path.join(__dirname, "assets", "icon.png");
 const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
-const DEFAULTS = { server: DEFAULT_SERVER, scale: 1, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
+const DEFAULTS = { server: DEFAULT_SERVER, scale: 0.7, sizeLayout: SIZE_LAYOUT, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
 const SHOT_WIDTH = 1280;  // 截图缩到这么宽再给页面（够她看清，传得也快）
 
 let settings = { ...DEFAULTS };
@@ -30,8 +31,20 @@ let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是�
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
 function loadSettings() {
   try { settings = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile(), "utf8")) }; } catch { settings = { ...DEFAULTS }; }
-  if (typeof settings.scale !== "number") settings.scale = SCALES[settings.size]?.scale || 1;  // 0.1.4 以前存的是 small / medium / large
+  if (typeof settings.scale !== "number") settings.scale = { small: 0.78, medium: 1, large: 1.28 }[settings.size] || 1;  // 0.1.4 以前存的是 small / medium / large
   delete settings.size;
+  if (settings.sizeLayout !== SIZE_LAYOUT) {  // 0.1.5 的大小整体偏大：缩到 0.7 倍，只缩这一次（脚底留在原地）
+    const before = sizeOf(clampScale(settings.scale)), after = sizeOf(clampScale(settings.scale * 0.7));
+    if (settings.position) {
+      settings.position = {
+        x: Math.round(settings.position.x + (before.width - after.width) / 2),
+        y: settings.position.y + before.height - after.height,
+      };
+    }
+    settings.scale *= 0.7;
+    settings.sizeLayout = SIZE_LAYOUT;
+    saveSettings();
+  }
   settings.scale = clampScale(settings.scale);
   if (!settings.server) settings.server = DEFAULT_SERVER;
 }

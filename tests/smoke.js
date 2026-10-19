@@ -82,7 +82,7 @@ async function waitFor(check, what, timeout = 20000) {
     const pet = await waitFor(() => app.windows().find((page) => !page.isClosed() && page.url().endsWith("/atri/pet")), "桌宠页");
     const petWindow = (await windows()).find((win) => win.url.endsWith("/atri/pet"));
     await waitFor(async () => (await windows()).find((win) => win.url.endsWith("/atri/pet"))?.visible, "桌宠窗口显示出来");
-    assert.equal(petWindow.bounds.width, 360);
+    assert.equal(petWindow.bounds.width, 252);  // 旧设置里的“中”（1 倍）缩到 0.7 倍
     assert.equal(petWindow.onTop, true);
     console.log("桌宠窗口：", JSON.stringify(petWindow.bounds));
 
@@ -110,18 +110,18 @@ async function waitFor(check, what, timeout = 20000) {
       const now = (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds;
       return now.width > before.width && now;
     }, "放大");
-    assert.equal(bigger.width, Math.round(360 * 1.08));
+    assert.equal(bigger.width, Math.round(360 * 0.7 * 1.08));
     assert.equal(bigger.y + bigger.height, before.y + before.height);
     assert.ok(Math.abs((bigger.x + bigger.width / 2) - (before.x + before.width / 2)) <= 1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).scale, 1.08);
+    assert.ok(Math.abs(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).scale - 0.7 * 1.08) < 1e-9);
     await pet.evaluate(() => window.atriDesktop.zoom(-1));
-    await waitFor(async () => (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds.width === 360, "缩回去");
+    await waitFor(async () => (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds.width === 252, "缩回去");
     await pet.evaluate(() => window.atriDesktop.dragStart());
     await new Promise((done) => setTimeout(done, 200));
     await pet.evaluate(() => window.atriDesktop.dragEnd());
     const dragged = (await windows()).find((win) => win.url.endsWith("/atri/pet")).bounds;
-    assert.equal(dragged.width, 360);
-    assert.equal(dragged.height, 600);
+    assert.equal(dragged.width, 252);
+    assert.equal(dragged.height, 420);
     console.log("缩放、拖动：", JSON.stringify(bigger), JSON.stringify(dragged));
 
     // 6. 去别的网站：拦下，还在桌宠页
