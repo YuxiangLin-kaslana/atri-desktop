@@ -56,6 +56,9 @@
         "repo": "atri-desktop",
         "releaseType": "release"
       }
+    ],
+    "asarUnpack": [
+      "src/hands.ps1"
     ]
   }
 }

@@ -1,6 +1,6 @@
 // 冒烟测试：起一个假的 ATRI 服务器，用 Playwright 启动这个应用，确认外壳的几件事都对：
 // 读设置、没登录先弹登录窗口、登录后打开透明桌宠窗口、页面拿得到 atriDesktop 拿不到 Node、
-// 鼠标位置传得进去、拖动能挪窗口、滚轮能放大缩小、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了、语音开关、摄像头不给。
+// 鼠标位置传得进去、拖动能挪窗口、滚轮能放大缩小、用电脑（点、打字、按键）、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了、语音开关、摄像头不给。
 // 用法：npm test（要能开窗口：Windows、macOS，或者 Linux 上有 X）
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -169,6 +169,50 @@ async function waitFor(check, what, timeout = 20000) {
     await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
     await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).shownNotes === 1, "藏起来时弹通知");
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).showInactive());
+    // 11. 用电脑（手 B）：没允许、没开始时做不了；允许后开始，截图、点测试窗口里的输入框、打中文、全选重写；结束后标记消失
+    assert.equal(await pet.evaluate(() => window.atriDesktop.computerState().then((state) => state.allowed)), false);
+    assert.ok((await pet.evaluate(() => window.atriDesktop.computerAct({ type: "type", text: "x" }))).error, "没开始不能动");
+    await app.evaluate(() => global.atriSmoke.setComputer(true));
+    await app.evaluate(({ BrowserWindow }) => {
+      const win = new BrowserWindow({ x: 60, y: 160, width: 420, height: 220, title: "手的测试", show: true });
+      win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent('<body style="margin:0"><input id="box" style="position:absolute;left:40px;top:60px;width:300px;height:40px;font-size:20px"></body>')}`);
+      global.handsTest = win;
+    });
+    await new Promise((done) => setTimeout(done, 1500));
+    await pet.evaluate(() => window.atriDesktop.computerBegin());
+    assert.equal((await app.evaluate(() => global.atriSmoke.state())).overlay, true);
+    const seen = await pet.evaluate(async () => {
+      const shot = await window.atriDesktop.computerObserve();
+      return { size: shot.image.length, screen: shot.screen, display: shot.display, window: shot.window, elements: shot.elements.length };
+    });
+    console.log("用电脑·看屏幕：", JSON.stringify(seen));
+    assert.ok(seen.size > 1000 && seen.screen.width > 0);
+    const box = await app.evaluate(async () => {
+      const bounds = global.handsTest.getContentBounds();
+      const rect = await global.handsTest.webContents.executeJavaScript("JSON.stringify(document.getElementById('box').getBoundingClientRect())");
+      const r = JSON.parse(rect);
+      return { x: bounds.x + r.left + r.width / 2, y: bounds.y + r.top + r.height / 2 };
+    });
+    const at = { x: Math.round((box.x - seen.display.x) * seen.screen.width / seen.display.width), y: Math.round((box.y - seen.display.y) * seen.screen.height / seen.display.height) };
+    const typed = await pet.evaluate(async (point) => {
+      const results = [];
+      results.push(await window.atriDesktop.computerAct({ type: "click", ...point }));
+      results.push(await window.atriDesktop.computerAct({ type: "type", text: "你好ATRI" }));
+      return results;
+    }, at);
+    console.log("用电脑·点和打字：", JSON.stringify(typed));
+    const value = () => app.evaluate(() => global.handsTest.webContents.executeJavaScript("document.getElementById('box').value"));
+    await waitFor(async () => (await value()) === "你好ATRI", `输入框里应该是“你好ATRI”，现在是“${await value()}”`, 8000);
+    await pet.evaluate(async () => {
+      await window.atriDesktop.computerAct({ type: "key", keys: "ctrl+a" });
+      await window.atriDesktop.computerAct({ type: "type", text: "hi" });
+    });
+    await waitFor(async () => (await value()) === "hi", "全选后重写", 8000);
+    await pet.evaluate(() => window.atriDesktop.computerEnd());
+    await waitFor(async () => !(await app.evaluate(() => global.atriSmoke.state())).overlay, "结束后标记消失");
+    assert.ok((await pet.evaluate(() => window.atriDesktop.computerAct({ type: "type", text: "x" }))).error, "结束后不能动");
+    await app.evaluate(() => { global.handsTest.close(); global.atriSmoke.setComputer(false); });
+
     // 摄像头不给；麦克风只给服务器的页面（这台机器没有麦克风时会说找不到设备，但不是被拒）
     const camera = await pet.evaluate(() => navigator.mediaDevices.getUserMedia({ video: true }).then(() => "ok", (error) => error.name));
     console.log("要摄像头：", camera);

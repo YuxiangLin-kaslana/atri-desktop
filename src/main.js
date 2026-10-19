@@ -2,7 +2,10 @@
 // 再管点透、拖动、托盘菜单、开机启动和自动更新。聊天、记忆、形象模型都在服务器上，这里不存任何密钥。
 // “让她看屏幕”默认关着，只有用户在托盘或右键菜单里打开才截图（每次启动都是关的）；她只能看，没有操作键盘鼠标的能力。
 // “语音对话”也是用户在菜单里开才占用麦克风（页面头顶挂着“在听”）；页面能要的权限只有麦克风，摄像头等一律不给。
+// “允许她用电脑”（手 B）也是用户在菜单里开：开着时服务器派来的事，桌宠一步步让这里动鼠标键盘（hands.ps1）；
+// 用户一碰鼠标键盘她马上停，屏幕顶上一直挂着“ATRI 正在用电脑”；付钱、发消息、删东西这类由服务器先问用户。
 const { app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, screen, session, shell } = require("electron");
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
@@ -18,7 +21,7 @@ const sizeOf = (scale) => ({ width: Math.round(BASE.width * scale), height: Math
 const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
 const ICON = path.join(__dirname, "assets", "icon.png");
 const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
-const DEFAULTS = { server: DEFAULT_SERVER, scale: 0.7, sizeLayout: SIZE_LAYOUT, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
+const DEFAULTS = { server: DEFAULT_SERVER, scale: 0.7, sizeLayout: SIZE_LAYOUT, computer: false, computerAgreed: false, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
 const SHOT_WIDTH = 1280;  // 截图缩到这么宽再给页面（够她看清，传得也快）
 
 let settings = { ...DEFAULTS };
@@ -26,6 +29,10 @@ let pet = null, chat = null, login = null, setup = null, tray = null;
 let models = [], updateReady = null, cursorTimer = null, dragTimer = null;
 let watching = false, locked = false;  // 让她看屏幕（不存进设置，每次启动都是关的）；锁屏时不截
 let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是关的）
+let hands = null, handsReady = null, handsSeq = 0;
+const handsWaiting = new Map();
+let control = null;  // 正在用电脑：{ startedAt, display, shot: {width, height}, interrupted, timer }
+let overlay = null;
 
 // ---- 设置：存在用户目录的 settings.json ----
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -230,6 +237,7 @@ ipcMain.on("atri:ready", (event, info) => {
   if (updateReady) pet.webContents.send("atri:command", `say:新版本 ${updateReady} 已经下好了，退出时会自动装上。`);
   pet.webContents.send("atri:watching", watching);  // 页面重新加载过：告诉它现在看没看、念不念、听不听
   pet.webContents.send("atri:command", settings.speak ? "speak:on" : "speak:off");
+  pet.webContents.send("atri:computer", { allowed: settings.computer });
   if (voiceOn) pet.webContents.send("atri:command", "voice:on");
 });
 ipcMain.handle("atri:capture", (event) => {
@@ -237,6 +245,26 @@ ipcMain.handle("atri:capture", (event) => {
   return captureScreen();
 });
 ipcMain.on("atri:stopWatching", (event) => { if (fromPet(event)) setWatching(false); });  // 页面只能关，不能开
+// 用电脑：页面问能不能用、开始和结束一件事、看屏幕、做一步。允许与否只能在菜单里改（页面只能停）
+ipcMain.handle("atri:computer:state", (event) => (fromPet(event) ? { allowed: settings.computer, platform: process.platform } : null));
+ipcMain.handle("atri:computer:away", async (event) => {
+  if (!fromPet(event) || locked) return false;
+  return powerMonitor.getSystemIdleTime() >= 300;  // 五分钟没动键盘鼠标：用户不在电脑前
+});
+ipcMain.handle("atri:computer:begin", async (event) => {
+  if (!fromPet(event)) throw new Error("不认识的请求");
+  await beginControl();
+  return true;
+});
+ipcMain.on("atri:computer:end", (event) => { if (fromPet(event)) endControl(); });
+ipcMain.handle("atri:computer:observe", (event) => {
+  if (!fromPet(event)) throw new Error("不认识的请求");
+  return observe();
+});
+ipcMain.handle("atri:computer:act", (event, action) => {
+  if (!fromPet(event)) return { ok: false, error: "不认识的请求" };
+  return act(action && typeof action === "object" ? action : {});
+});
 ipcMain.on("atri:voiceOff", (event) => { if (fromPet(event)) { voiceOn = false; refreshTray(); } });  // 页面上点了“在听”关掉
 // 提醒、她主动说的话：她站在桌面上时气泡就够了；被藏起来时弹 Windows 通知，点一下叫她出来
 let shownNotes = 0;
@@ -323,6 +351,177 @@ function guardPermissions() {
   partition.setPermissionCheckHandler((_contents, permission, origin, details) => allowed(permission, origin, details));
 }
 
+// ---- 允许她用电脑（手 B） ----
+function handsScript() {
+  return path.join(__dirname, "hands.ps1").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);  // 打包后在 asar 外面
+}
+function startHands() {
+  if (hands || process.platform !== "win32") return handsReady;
+  hands = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", handsScript()], { windowsHide: true });
+  let buffer = "";
+  handsReady = new Promise((resolve, reject) => {
+    const failed = (error) => { log("hands failed", error); reject(error); };
+    hands.once("error", failed);
+    hands.stdout.setEncoding("utf8");
+    hands.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      let cut;
+      while ((cut = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, cut).trim();
+        buffer = buffer.slice(cut + 1);
+        if (!line) continue;
+        let reply;
+        try { reply = JSON.parse(line); } catch { continue; }
+        if (reply.ready) { resolve(); continue; }
+        const waiter = handsWaiting.get(reply.id);
+        if (waiter) { handsWaiting.delete(reply.id); waiter(reply); }
+      }
+    });
+  });
+  hands.stderr.on("data", (chunk) => log("hands", String(chunk).slice(0, 500)));
+  hands.on("exit", (code) => {
+    log("hands exited", code);
+    hands = null;
+    handsReady = null;
+    for (const waiter of handsWaiting.values()) waiter({ ok: false, error: "手没了" });
+    handsWaiting.clear();
+  });
+  return handsReady;
+}
+function stopHands() {
+  if (hands) { hands.stdin.end(); hands.kill(); }
+  hands = null;
+  handsReady = null;
+}
+async function handsCall(command, timeoutMs = 15000) {
+  await startHands();
+  if (!hands) throw new Error("这台电脑上用不了");
+  const id = ++handsSeq;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { handsWaiting.delete(id); resolve({ ok: false, error: "手没反应" }); }, timeoutMs);
+    handsWaiting.set(id, (reply) => { clearTimeout(timer); resolve(reply); });
+    hands.stdin.write(`${JSON.stringify({ ...command, id })}\n`);
+  });
+}
+async function setComputer(on, { asked = true } = {}) {
+  if (on && asked && !settings.computerAgreed) {
+    const { response } = await dialog.showMessageBox({
+      type: "question", title: "让 ATRI 用你的电脑", buttons: ["允许", "取消"], defaultId: 0, cancelId: 1,
+      message: "允许以后，她可以动你的鼠标和键盘",
+      detail: "你在聊天里让她做事，或者你离开电脑时她想做的事，她会一步步看屏幕、点鼠标、打字。\n"
+        + "她在用的时候屏幕顶上一直有“ATRI 正在用电脑”；你一碰鼠标或键盘她马上停。锁屏时不动。\n"
+        + "付钱、发消息、删东西、输密码、装软件这类，她会先问你。随时可以在这个菜单里关掉。",
+    });
+    if (response !== 0) return refreshTray();
+    settings.computerAgreed = true;
+  }
+  settings.computer = Boolean(on);
+  saveSettings();
+  if (!settings.computer) { endControl("你关掉了“允许她用电脑”"); stopHands(); }
+  refreshTray();
+  pet?.webContents.send("atri:computer", { allowed: settings.computer });
+}
+function showOverlay(display) {
+  if (overlay) return;
+  const width = 420, height = 34, area = display.workArea;
+  overlay = new BrowserWindow({
+    width, height, x: Math.round(area.x + (area.width - width) / 2), y: area.y + 6, frame: false, transparent: true, resizable: false,
+    focusable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, show: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  overlay.setAlwaysOnTop(true, "screen-saver");
+  overlay.setIgnoreMouseEvents(true);
+  overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<body style="margin:0;background:transparent;font:13px/34px system-ui,'Microsoft YaHei',sans-serif">
+    <div style="margin:0 auto;width:fit-content;padding:0 14px;border-radius:17px;background:rgba(200,75,75,.92);color:#fff">ATRI 正在用电脑 · 动一下鼠标或按任意键就停</div></body>`)}`);
+  overlay.once("ready-to-show", () => overlay?.showInactive());
+  overlay.on("closed", () => { overlay = null; });
+}
+function endControl(reason) {
+  if (!control) return;
+  clearInterval(control.timer);
+  const wasInterrupted = control.interrupted;
+  control = null;
+  overlay?.close();
+  overlay = null;
+  if (reason || wasInterrupted) pet?.webContents.send("atri:computer:stopped", reason || "你动了鼠标或键盘");
+}
+async function beginControl() {
+  if (!settings.computer) throw new Error("没有允许她用电脑");
+  if (locked) throw new Error("锁屏了");
+  await startHands();
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  control = { startedAt: Date.now(), display, shot: null, interrupted: false, timer: null };
+  showOverlay(display);
+  // 你一碰鼠标键盘就停：每 0.3 秒问一次“真人”多久没动了
+  control.timer = setInterval(async () => {
+    if (!control) return;
+    const reply = await handsCall({ cmd: "idle" }, 3000);
+    if (control && reply.ok && reply.physical_ms < Date.now() - control.startedAt - 300) {
+      control.interrupted = true;
+      endControl("你动了鼠标或键盘，她先停下了");
+    }
+  }, 300);
+}
+function toShot(point) {  // 屏幕物理像素 → 截图上的像素
+  const { display, shot } = control;
+  const dip = process.platform === "win32" ? screen.screenToDipPoint(point) : point;
+  return { x: Math.round((dip.x - display.bounds.x) * shot.width / display.bounds.width), y: Math.round((dip.y - display.bounds.y) * shot.height / display.bounds.height) };
+}
+function toScreen(x, y) {  // 截图上的像素 → 屏幕物理像素
+  const { display, shot } = control;
+  const dip = { x: display.bounds.x + x * display.bounds.width / shot.width, y: display.bounds.y + y * display.bounds.height / shot.height };
+  const point = process.platform === "win32" ? screen.dipToScreenPoint(dip) : dip;
+  return { x: Math.round(point.x), y: Math.round(point.y) };
+}
+async function observe() {
+  if (!control || control.interrupted) throw new Error("没在用电脑");
+  const { display } = control;
+  const size = { width: SHOT_WIDTH, height: Math.round(SHOT_WIDTH * display.size.height / display.size.width) };
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: size });
+  const source = sources.find((each) => each.display_id === String(display.id)) || sources[0];
+  if (!source || source.thumbnail.isEmpty()) throw new Error("截不到屏幕");
+  control.shot = source.thumbnail.getSize();
+  const found = await handsCall({ cmd: "elements", max: 80 }, 20000);
+  const elements = [];
+  for (const item of (found.ok ? found.elements || [] : [])) {
+    const topLeft = toShot({ x: item.x, y: item.y }), bottomRight = toShot({ x: item.x + item.w, y: item.y + item.h });
+    if (bottomRight.x <= 0 || bottomRight.y <= 0 || topLeft.x >= control.shot.width || topLeft.y >= control.shot.height) continue;
+    elements.push({ id: elements.length + 1, role: item.role, name: item.name, x: topLeft.x, y: topLeft.y,
+      w: bottomRight.x - topLeft.x, h: bottomRight.y - topLeft.y, focused: item.focused, password: item.password });
+  }
+  control.elements = elements;
+  return { image: new Uint8Array(source.thumbnail.toJPEG(70)), screen: control.shot, window: found.window || "", elements,
+    display: { x: display.bounds.x, y: display.bounds.y, width: display.bounds.width, height: display.bounds.height } };
+}
+async function act(action) {
+  if (!control || control.interrupted) return { ok: false, interrupted: Boolean(control?.interrupted), error: "没在用电脑" };
+  if (!control.shot) return { ok: false, error: "还没看过屏幕" };
+  const at = (x, y) => toScreen(Number(x) || 0, Number(y) || 0);
+  let target = null;
+  if (action.element != null) {
+    const element = (control.elements || []).find((each) => String(each.id) === String(action.element));
+    if (!element) return { ok: false, error: `没有编号 ${action.element} 的控件` };
+    target = at(element.x + element.w / 2, element.y + element.h / 2);
+  } else if (action.x != null) {
+    target = at(action.x, action.y);
+  }
+  let reply;
+  switch (action.type) {
+    case "click": reply = target ? await handsCall({ cmd: "click", ...target, button: action.button === "right" ? "right" : "left", count: action.count === 2 ? 2 : 1 }) : { ok: false, error: "点哪里？" }; break;
+    case "type": reply = await handsCall({ cmd: "type", text: String(action.text || "").slice(0, 2000) }); break;
+    case "key": reply = await handsCall({ cmd: "keys", keys: String(action.keys || "") }); break;
+    case "scroll": reply = await handsCall({ cmd: "scroll", ...(target || at(control.shot.width / 2, control.shot.height / 2)), amount: Math.max(-30, Math.min(30, Number(action.amount) || -5)) }); break;
+    case "open":
+      if (!/^https?:\/\//i.test(String(action.url || ""))) return { ok: false, error: "只能打开网页" };
+      await shell.openExternal(String(action.url));
+      reply = { ok: true };
+      break;
+    default: return { ok: false, error: `不认识的动作：${action.type}` };
+  }
+  if (control?.interrupted) return { ok: false, interrupted: true, error: "你动了鼠标或键盘" };
+  return reply.ok ? { ok: true } : { ok: false, error: reply.error || "没做成" };
+}
+
 // ---- 托盘和右键菜单 ----
 function menuItems() {
   const items = [
@@ -331,6 +530,8 @@ function menuItems() {
     { label: "语音对话", type: "checkbox", checked: voiceOn, click: (item) => setVoice(item.checked) },
     { label: "念出她的话", type: "checkbox", checked: settings.speak, click: (item) => setSpeak(item.checked) },
     { label: "让她看屏幕", type: "checkbox", checked: watching, click: (item) => setWatching(item.checked) },
+    { label: "允许她用电脑", type: "checkbox", checked: settings.computer, visible: process.platform === "win32" || Boolean(process.env.ATRI_SMOKE),
+      click: (item) => setComputer(item.checked) },
     { type: "separator" },
     { label: "大小", submenu: [
       ...Object.values(SCALES).map((size) => ({ label: size.label, type: "radio", checked: Math.abs(settings.scale - size.scale) < 0.01, click: () => resizePet(size.scale) })),
@@ -425,10 +626,13 @@ if (!app.requestSingleInstanceLock()) {
     if (settings.server) createPet(); else openSetup();
     if (!globalShortcut.register(SHORTCUT, talk)) log("shortcut taken", SHORTCUT);
     setupUpdater();
-    powerMonitor.on("lock-screen", () => { locked = true; });
+    powerMonitor.on("lock-screen", () => { locked = true; endControl("锁屏了，她先停下了"); });
     powerMonitor.on("unlock-screen", () => { locked = false; });
     if (process.env.ATRI_SMOKE) {  // 冒烟测试用
-      global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes }) };
+      global.atriSmoke = {
+        setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, setComputer: (on) => setComputer(on, { asked: false }),
+        state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes, computer: settings.computer, controlling: Boolean(control), overlay: Boolean(overlay) }),
+      };
     }
     screen.on("display-removed", () => {
       const size = sizeOf(settings.scale);
@@ -436,5 +640,5 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
   app.on("window-all-closed", () => {});  // 窗口都关了也留在托盘里
-  app.on("will-quit", () => globalShortcut.unregisterAll());
+  app.on("will-quit", () => { globalShortcut.unregisterAll(); stopHands(); });
 }

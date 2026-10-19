@@ -18,5 +18,14 @@ contextBridge.exposeInMainWorld("atriDesktop", {
   stopWatching: () => ipcRenderer.send("atri:stopWatching"),
   onWatching: (handler) => ipcRenderer.on("atri:watching", (_event, on) => handler(Boolean(on))),
   voiceOff: () => ipcRenderer.send("atri:voiceOff"),
-  notify: (title, body) => ipcRenderer.send("atri:notify", String(title ?? ""), String(body ?? "")),  // 她被藏起来时弹系统通知  // 页面上点“在听”关掉语音对话，菜单跟着取消勾选
+  notify: (title, body) => ipcRenderer.send("atri:notify", String(title ?? ""), String(body ?? "")),  // 她被藏起来时弹系统通知
+  // 用电脑（手 B）：允许与否只能在菜单里改；页面拿任务、开始、看屏幕、做一步、结束
+  computerState: () => ipcRenderer.invoke("atri:computer:state"),
+  computerAway: () => ipcRenderer.invoke("atri:computer:away"),
+  computerBegin: () => ipcRenderer.invoke("atri:computer:begin"),
+  computerEnd: () => ipcRenderer.send("atri:computer:end"),
+  computerObserve: () => ipcRenderer.invoke("atri:computer:observe"),
+  computerAct: (action) => ipcRenderer.invoke("atri:computer:act", JSON.parse(JSON.stringify(action ?? {}))),
+  onComputer: (handler) => ipcRenderer.on("atri:computer", (_event, state) => handler(state)),
+  onComputerStopped: (handler) => ipcRenderer.on("atri:computer:stopped", (_event, reason) => handler(String(reason))),  // 页面上点“在听”关掉语音对话，菜单跟着取消勾选
 });
