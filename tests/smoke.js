@@ -140,6 +140,14 @@ async function waitFor(check, what, timeout = 20000) {
     await app.evaluate(() => global.atriSmoke.setSpeak(false));
     await waitFor(() => pet.evaluate(() => window.commands.includes("speak:off")), "页面收到 speak:off");
     assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).speak, false);
+    // 10. 系统通知：她在桌面上时不弹（气泡就够了），藏起来才弹
+    await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
+    await new Promise((done) => setTimeout(done, 300));
+    assert.equal((await app.evaluate(() => global.atriSmoke.state())).shownNotes, 0);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).hide());
+    await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
+    await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).shownNotes === 1, "藏起来时弹通知");
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).showInactive());
     // 摄像头不给；麦克风只给服务器的页面（这台机器没有麦克风时会说找不到设备，但不是被拒）
     const camera = await pet.evaluate(() => navigator.mediaDevices.getUserMedia({ video: true }).then(() => "ok", (error) => error.name));
     console.log("要摄像头：", camera);

@@ -2,7 +2,7 @@
 // 再管点透、拖动、托盘菜单、开机启动和自动更新。聊天、记忆、形象模型都在服务器上，这里不存任何密钥。
 // “让她看屏幕”默认关着，只有用户在托盘或右键菜单里打开才截图（每次启动都是关的）；她只能看，没有操作键盘鼠标的能力。
 // “语音对话”也是用户在菜单里开才占用麦克风（页面头顶挂着“在听”）；页面能要的权限只有麦克风，摄像头等一律不给。
-const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, screen, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, screen, session, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
@@ -197,6 +197,15 @@ ipcMain.handle("atri:capture", (event) => {
 });
 ipcMain.on("atri:stopWatching", (event) => { if (fromPet(event)) setWatching(false); });  // 页面只能关，不能开
 ipcMain.on("atri:voiceOff", (event) => { if (fromPet(event)) { voiceOn = false; refreshTray(); } });  // 页面上点了“在听”关掉
+// 提醒、她主动说的话：她站在桌面上时气泡就够了；被藏起来时弹 Windows 通知，点一下叫她出来
+let shownNotes = 0;
+ipcMain.on("atri:notify", (event, title, body) => {
+  if (!fromPet(event) || pet.isVisible() || !Notification.isSupported()) return;
+  shownNotes += 1;
+  const note = new Notification({ title: String(title || "ATRI").slice(0, 100), body: String(body || "").slice(0, 300), icon: ICON });
+  note.on("click", () => { showPet(); });
+  note.show();
+});
 ipcMain.handle("atri:idle", (event) => (fromPet(event) ? powerMonitor.getSystemIdleTime() : null));
 ipcMain.handle("atri:setup:current", (event) => (setup && event.sender === setup.webContents ? settings.server : ""));
 ipcMain.handle("atri:setup:save", async (event, raw) => {
@@ -374,7 +383,7 @@ if (!app.requestSingleInstanceLock()) {
     powerMonitor.on("lock-screen", () => { locked = true; });
     powerMonitor.on("unlock-screen", () => { locked = false; });
     if (process.env.ATRI_SMOKE) {  // 冒烟测试用
-      global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, state: () => ({ watching, voiceOn, speak: settings.speak }) };
+      global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes }) };
     }
     screen.on("display-removed", () => { if (pet && !onScreen(pet.getBounds(), SIZES[settings.size])) pet.setPosition(defaultPosition(SIZES[settings.size]).x, defaultPosition(SIZES[settings.size]).y); });
   });
