@@ -1,7 +1,8 @@
 // ATRI 桌宠的主进程。它只是个外壳：把 ATRI 服务器（默认 DEFAULT_SERVER）上的桌宠页（/atri/pet）放进一个透明、没边框、总在最前的小窗口，
 // 再管点透、拖动、托盘菜单、开机启动和自动更新。聊天、记忆、形象模型都在服务器上，这里不存任何密钥。
 // “让她看屏幕”默认关着，只有用户在托盘或右键菜单里打开才截图（每次启动都是关的）；她只能看，没有操作键盘鼠标的能力。
-const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, screen, shell } = require("electron");
+// “语音对话”也是用户在菜单里开才占用麦克风（页面头顶挂着“在听”）；页面能要的权限只有麦克风，摄像头等一律不给。
+const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, powerMonitor, screen, session, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
@@ -11,13 +12,14 @@ const SIZES = { small: { label: "小", width: 280, height: 470 }, medium: { labe
 const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
 const ICON = path.join(__dirname, "assets", "icon.png");
 const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
-const DEFAULTS = { server: DEFAULT_SERVER, size: "medium", position: null, alwaysOnTop: true, model: null, watchAgreed: false };
+const DEFAULTS = { server: DEFAULT_SERVER, size: "medium", position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
 const SHOT_WIDTH = 1280;  // 截图缩到这么宽再给页面（够她看清，传得也快）
 
 let settings = { ...DEFAULTS };
 let pet = null, chat = null, login = null, setup = null, tray = null;
 let models = [], updateReady = null, cursorTimer = null;
 let watching = false, locked = false;  // 让她看屏幕（不存进设置，每次启动都是关的）；锁屏时不截
+let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是关的）
 
 // ---- 设置：存在用户目录的 settings.json ----
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
@@ -72,6 +74,7 @@ function createPet() {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"), partition: PARTITION,
       contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false,
+      autoplayPolicy: "no-user-gesture-required",  // 她主动说话、提醒时不用先点一下才出声
     },
   });
   if (settings.alwaysOnTop) pet.setAlwaysOnTop(true, "floating");
@@ -84,7 +87,11 @@ function createPet() {
   });
   pet.once("ready-to-show", () => { if (!isLogin(pet.webContents.getURL())) pet.showInactive(); });  // 被转到登录页时不显示
   pet.on("show", refreshTray);
-  pet.on("hide", () => { refreshTray(); if (watching) setWatching(false); });  // 藏起来就看不到“在看屏幕”的标记了：一起关掉
+  pet.on("hide", () => {  // 藏起来就看不到“在看屏幕”“在听”的标记了：一起关掉
+    refreshTray();
+    if (watching) setWatching(false);
+    if (voiceOn) setVoice(false);
+  });
   pet.on("closed", () => { pet = null; });
   pet.loadURL(`${origin()}/atri/pet`);
   // 视线：每隔一会儿把鼠标在屏幕上的位置（相对窗口）告诉页面，窗口外也跟着看
@@ -180,13 +187,16 @@ ipcMain.on("atri:ready", (event, info) => {
   settings.model = typeof info?.model === "string" ? info.model : settings.model;
   refreshTray();
   if (updateReady) pet.webContents.send("atri:command", `say:新版本 ${updateReady} 已经下好了，退出时会自动装上。`);
-  pet.webContents.send("atri:watching", watching);  // 页面重新加载过：告诉它现在看没看
+  pet.webContents.send("atri:watching", watching);  // 页面重新加载过：告诉它现在看没看、念不念、听不听
+  pet.webContents.send("atri:command", settings.speak ? "speak:on" : "speak:off");
+  if (voiceOn) pet.webContents.send("atri:command", "voice:on");
 });
 ipcMain.handle("atri:capture", (event) => {
   if (!fromPet(event)) throw new Error("不认识的请求");
   return captureScreen();
 });
 ipcMain.on("atri:stopWatching", (event) => { if (fromPet(event)) setWatching(false); });  // 页面只能关，不能开
+ipcMain.on("atri:voiceOff", (event) => { if (fromPet(event)) { voiceOn = false; refreshTray(); } });  // 页面上点了“在听”关掉
 ipcMain.handle("atri:idle", (event) => (fromPet(event) ? powerMonitor.getSystemIdleTime() : null));
 ipcMain.handle("atri:setup:current", (event) => (setup && event.sender === setup.webContents ? settings.server : ""));
 ipcMain.handle("atri:setup:save", async (event, raw) => {
@@ -239,11 +249,37 @@ async function captureScreen() {
   return new Uint8Array(source.thumbnail.toJPEG(70));
 }
 
+// ---- 语音：语音对话（一直听）和念出她的话，都在菜单里开关 ----
+function setVoice(on) {
+  voiceOn = Boolean(on);
+  refreshTray();
+  pet?.webContents.send("atri:command", voiceOn ? "voice:on" : "voice:off");
+}
+function setSpeak(on) {
+  settings.speak = Boolean(on);
+  saveSettings();
+  refreshTray();
+  pet?.webContents.send("atri:command", settings.speak ? "speak:on" : "speak:off");
+}
+// 页面能要的权限：只有服务器那个来源的页面要麦克风（不要摄像头）、往剪贴板写字
+function guardPermissions() {
+  const allowed = (permission, url, details = {}) => {
+    if (!sameOrigin(url || "")) return false;
+    if (permission === "media") return (details.mediaTypes || ["audio"]).every((type) => type === "audio") && details.mediaType !== "video";
+    return permission === "clipboard-sanitized-write";
+  };
+  const partition = session.fromPartition(PARTITION);
+  partition.setPermissionRequestHandler((_contents, permission, callback, details) => callback(allowed(permission, details.requestingUrl, details)));
+  partition.setPermissionCheckHandler((_contents, permission, origin, details) => allowed(permission, origin, details));
+}
+
 // ---- 托盘和右键菜单 ----
 function menuItems() {
   const items = [
     { label: "和她说话", accelerator: SHORTCUT, click: talk },
     { label: "打开聊天窗口", click: openChat },
+    { label: "语音对话", type: "checkbox", checked: voiceOn, click: (item) => setVoice(item.checked) },
+    { label: "念出她的话", type: "checkbox", checked: settings.speak, click: (item) => setSpeak(item.checked) },
     { label: "让她看屏幕", type: "checkbox", checked: watching, click: (item) => setWatching(item.checked) },
     { type: "separator" },
     { label: "大小", submenu: Object.entries(SIZES).map(([key, size]) => ({ label: size.label, type: "radio", checked: settings.size === key, click: () => resizePet(key) })) },
@@ -330,13 +366,16 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     app.setAppUserModelId("io.github.yuxianglin-kaslana.atri-desktop");
     loadSettings();
+    guardPermissions();
     createTray();
     if (settings.server) createPet(); else openSetup();
     if (!globalShortcut.register(SHORTCUT, talk)) log("shortcut taken", SHORTCUT);
     setupUpdater();
     powerMonitor.on("lock-screen", () => { locked = true; });
     powerMonitor.on("unlock-screen", () => { locked = false; });
-    if (process.env.ATRI_SMOKE) global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }) };  // 冒烟测试用
+    if (process.env.ATRI_SMOKE) {  // 冒烟测试用
+      global.atriSmoke = { setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, state: () => ({ watching, voiceOn, speak: settings.speak }) };
+    }
     screen.on("display-removed", () => { if (pet && !onScreen(pet.getBounds(), SIZES[settings.size])) pet.setPosition(defaultPosition(SIZES[settings.size]).x, defaultPosition(SIZES[settings.size]).y); });
   });
   app.on("window-all-closed", () => {});  // 窗口都关了也留在托盘里

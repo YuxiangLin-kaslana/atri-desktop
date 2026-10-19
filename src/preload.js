@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld("atriDesktop", {
   captureScreen: () => ipcRenderer.invoke("atri:capture"),  // JPEG（Uint8Array）
   stopWatching: () => ipcRenderer.send("atri:stopWatching"),
   onWatching: (handler) => ipcRenderer.on("atri:watching", (_event, on) => handler(Boolean(on))),
+  voiceOff: () => ipcRenderer.send("atri:voiceOff"),  // 页面上点“在听”关掉语音对话，菜单跟着取消勾选
 });

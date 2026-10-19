@@ -1,6 +1,6 @@
 // 冒烟测试：起一个假的 ATRI 服务器，用 Playwright 启动这个应用，确认外壳的几件事都对：
 // 读设置、没登录先弹登录窗口、登录后打开透明桌宠窗口、页面拿得到 atriDesktop 拿不到 Node、
-// 鼠标位置传得进去、拖动能挪窗口、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了。
+// 鼠标位置传得进去、拖动能挪窗口、点透开关不报错、去别的网站会被拦下、“看屏幕”默认关着且页面开不了、语音开关、摄像头不给。
 // 用法：npm test（要能开窗口：Windows、macOS，或者 Linux 上有 X）
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -130,6 +130,20 @@ async function waitFor(check, what, timeout = 20000) {
     await pet.evaluate(() => window.atriDesktop.stopWatching());
     await waitFor(() => pet.evaluate(() => window.watching === false), "页面知道不看了");
     assert.ok((await tryShot()).error, "关了就不该截得到屏幕");
+
+    // 9. 语音：菜单开“语音对话”页面收到 voice:on，页面点“在听”关掉后菜单跟着关；“念出她的话”默认开，关了存进设置
+    await app.evaluate(() => global.atriSmoke.setVoice(true));
+    await waitFor(() => pet.evaluate(() => window.commands.includes("voice:on")), "页面收到 voice:on");
+    await pet.evaluate(() => window.atriDesktop.voiceOff());
+    await waitFor(async () => !(await app.evaluate(() => global.atriSmoke.state())).voiceOn, "菜单里的语音对话关掉");
+    assert.equal((await app.evaluate(() => global.atriSmoke.state())).speak, true);
+    await app.evaluate(() => global.atriSmoke.setSpeak(false));
+    await waitFor(() => pet.evaluate(() => window.commands.includes("speak:off")), "页面收到 speak:off");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).speak, false);
+    // 摄像头不给；麦克风只给服务器的页面（这台机器没有麦克风时会说找不到设备，但不是被拒）
+    const camera = await pet.evaluate(() => navigator.mediaDevices.getUserMedia({ video: true }).then(() => "ok", (error) => error.name));
+    console.log("要摄像头：", camera);
+    assert.notEqual(camera, "ok");
     console.log("冒烟测试通过");
   } finally {
     await app.close().catch(() => {});
