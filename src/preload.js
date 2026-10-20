@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld("atriDesktop", {
   // 看屏幕：只有用户在菜单里打开了才截得到；页面只能把它关掉，开不了
   captureScreen: () => ipcRenderer.invoke("atri:capture"),  // JPEG（Uint8Array）
   stopWatching: () => ipcRenderer.send("atri:stopWatching"),
+  // 移动桌宠：托盘菜单打开时才能拖动、滚轮调大小（页面问现在开没开；页面上点“完成”关掉）
+  moveMode: () => ipcRenderer.invoke("atri:move:state"),
+  setMoveMode: (on) => ipcRenderer.send("atri:move:set", Boolean(on)),
   onWatching: (handler) => ipcRenderer.on("atri:watching", (_event, on) => handler(Boolean(on))),
   voiceOff: () => ipcRenderer.send("atri:voiceOff"),
   notify: (title, body) => ipcRenderer.send("atri:notify", String(title ?? ""), String(body ?? "")),  // 她被藏起来时弹系统通知

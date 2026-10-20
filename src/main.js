@@ -28,6 +28,7 @@ let settings = { ...DEFAULTS };
 let pet = null, chat = null, login = null, setup = null, keysWindow = null, tray = null;
 let shortcutOn = "";  // 现在注册着的快捷键
 let models = [], updateReady = null, cursorTimer = null, dragTimer = null;
+let moving = false;  // 移动桌宠：打开时才能拖动她、滚轮调大小（不存进设置，每次启动都是关的）
 let watching = false, locked = false;  // 让她看屏幕（不存进设置，每次启动都是关的）；锁屏时不截
 let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是关的）
 let hands = null, handsReady = null, handsSeq = 0;
@@ -375,6 +376,14 @@ function setVoice(on) {
   refreshTray();
   pet?.webContents.send("atri:command", voiceOn ? "voice:on" : "voice:off");
 }
+function setMoving(on) {
+  moving = Boolean(on);
+  refreshTray();
+  if (moving) showPet();
+  pet?.webContents.send("atri:command", moving ? "move:on" : "move:off");
+}
+ipcMain.handle("atri:move:state", (event) => (fromPet(event) ? moving : false));
+ipcMain.on("atri:move:set", (event, on) => { if (fromPet(event)) setMoving(on); });
 function setSpeak(on) {
   settings.speak = Boolean(on);
   saveSettings();
@@ -568,6 +577,7 @@ async function act(action) {
 function menuItems() {
   const items = [
     { label: "和她说话", ...(settings.shortcut ? { accelerator: settings.shortcut } : {}), click: talk },
+    { label: "移动桌宠（拖动、滚轮调大小）", type: "checkbox", checked: moving, click: (item) => setMoving(item.checked) },
     { label: "打开聊天窗口", click: openChat },
     { label: "语音对话", type: "checkbox", checked: voiceOn, click: (item) => setVoice(item.checked) },
     { label: "念出她的话", type: "checkbox", checked: settings.speak, click: (item) => setSpeak(item.checked) },
@@ -681,9 +691,9 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.ATRI_SMOKE) {  // 冒烟测试用
       global.atriSmoke = {
         setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, setComputer: (on) => setComputer(on, { asked: false }),
-        setShortcut: saveShortcut, openShortcut,
+        setShortcut: saveShortcut, openShortcut, setMoving,
         state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes, computer: settings.computer, controlling: Boolean(control), overlay: Boolean(overlay),
-          shortcut: settings.shortcut, shortcutOn, shortcutRegistered: shortcutOn ? globalShortcut.isRegistered(shortcutOn) : false }),
+          moving, shortcut: settings.shortcut, shortcutOn, shortcutRegistered: shortcutOn ? globalShortcut.isRegistered(shortcutOn) : false }),
       };
     }
     screen.on("display-removed", () => {

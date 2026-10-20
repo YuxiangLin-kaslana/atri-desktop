@@ -169,6 +169,14 @@ async function waitFor(check, what, timeout = 20000) {
     await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
     await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).shownNotes === 1, "藏起来时弹通知");
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).showInactive());
+    // 10a. 移动桌宠：默认关（平时拖不动）；托盘里打开，页面收到 move:on；页面上点“完成”就关掉
+    assert.equal(await pet.evaluate(() => window.atriDesktop.moveMode()), false);
+    await app.evaluate(() => global.atriSmoke.setMoving(true));
+    await waitFor(() => pet.evaluate(() => window.commands.includes("move:on")), "页面收到 move:on");
+    assert.equal(await pet.evaluate(() => window.atriDesktop.moveMode()), true);
+    await pet.evaluate(() => window.atriDesktop.setMoveMode(false));
+    await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).moving === false, "页面点完成就关掉");
+    await waitFor(() => pet.evaluate(() => window.commands.includes("move:off")), "页面收到 move:off");
     // 10b. 快捷键：默认 Ctrl+Alt+A；能换（旧的放开）、能不用；认不出来的、被占了的不收；设置窗口打得开
     const keys = () => app.evaluate(() => global.atriSmoke.state());
     assert.equal((await keys()).shortcut, "Control+Alt+A");
