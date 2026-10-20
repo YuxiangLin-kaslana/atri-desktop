@@ -408,7 +408,7 @@ async function setComputer(on, { asked = true } = {}) {
     const { response } = await dialog.showMessageBox({
       type: "question", title: "让 ATRI 用你的电脑", buttons: ["允许", "取消"], defaultId: 0, cancelId: 1,
       message: "允许以后，她可以动你的鼠标和键盘",
-      detail: "你在聊天里让她做事，或者你离开电脑时她想做的事，她会一步步看屏幕、点鼠标、打字。\n"
+      detail: "只做你在聊天里让她做的事：她会一步步看屏幕、点鼠标、打字。她自己想做的事用她自己的电脑，不碰你的电脑和账号。\n"
         + "她在用的时候屏幕顶上一直有“ATRI 正在用电脑”；你一碰鼠标或键盘她马上停。锁屏时不动。\n"
         + "付钱、发消息、删东西、输密码、装软件这类，她会先问你。随时可以在这个菜单里关掉。",
     });
