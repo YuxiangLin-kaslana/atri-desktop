@@ -18,14 +18,15 @@ const MIN_SCALE = 0.4, MAX_SCALE = 2.5, ZOOM_STEP = 1.08;
 const SIZE_LAYOUT = 2;  // 设置里的大小是第几版：1（0.1.5）的比例整体缩到 0.7
 const clampScale = (scale) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, Number(scale) || 1));
 const sizeOf = (scale) => ({ width: Math.round(BASE.width * scale), height: Math.round(BASE.height * scale) });
-const SHORTCUT = "Control+Alt+A";  // 叫她出来说话
+const DEFAULT_SHORTCUT = "Control+Alt+A";  // 叫她出来说话；托盘菜单“快捷键…”里能换（和 QQ 截图撞了之类），空字符串是不用
 const ICON = path.join(__dirname, "assets", "icon.png");
 const DEFAULT_SERVER = "https://atri.yuxianglin.xyz";  // 默认连这个；要连别的服务器在托盘菜单“服务器地址…”里改
-const DEFAULTS = { server: DEFAULT_SERVER, scale: 0.7, sizeLayout: SIZE_LAYOUT, computer: false, computerAgreed: false, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true };
+const DEFAULTS = { server: DEFAULT_SERVER, scale: 0.7, sizeLayout: SIZE_LAYOUT, computer: false, computerAgreed: false, position: null, alwaysOnTop: true, model: null, watchAgreed: false, speak: true, shortcut: DEFAULT_SHORTCUT };
 const SHOT_WIDTH = 1280;  // 截图缩到这么宽再给页面（够她看清，传得也快）
 
 let settings = { ...DEFAULTS };
-let pet = null, chat = null, login = null, setup = null, tray = null;
+let pet = null, chat = null, login = null, setup = null, keysWindow = null, tray = null;
+let shortcutOn = "";  // 现在注册着的快捷键
 let models = [], updateReady = null, cursorTimer = null, dragTimer = null;
 let watching = false, locked = false;  // 让她看屏幕（不存进设置，每次启动都是关的）；锁屏时不截
 let voiceOn = false;  // 语音对话（麦克风一直听；每次启动都是关的）
@@ -213,6 +214,47 @@ function openSetup() {
   setup.on("closed", () => { setup = null; if (!settings.server) app.quit(); });
   setup.loadFile(path.join(__dirname, "setup.html"));
 }
+
+// ---- 和她说话的快捷键：能换、能不用；被别的软件占了就提醒去换 ----
+const showKeys = (accelerator) => (accelerator ? accelerator.replace(/Control/g, "Ctrl").replace(/Super/g, "Win") : "不用");
+function useShortcut(accelerator) {
+  if (shortcutOn) globalShortcut.unregister(shortcutOn);
+  shortcutOn = "";
+  if (!accelerator) return true;
+  let ok = false;
+  try { ok = globalShortcut.register(accelerator, talk); } catch { ok = false; }  // 写法不对会抛错
+  if (ok) shortcutOn = accelerator;
+  return ok;
+}
+function saveShortcut(raw) {
+  const accelerator = String(raw || "").trim();
+  if (accelerator && !/^((Control|Alt|Shift|Super)\+)*([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|num[0-9]|Space|Enter|Tab|Backspace|Delete|Insert|Home|End|PageUp|PageDown|Up|Down|Left|Right|Escape|[`\-=\[\]\\;',./])$/.test(accelerator)) {
+    return { ok: false, message: "这个组合认不出来，换一个试试" };
+  }
+  if (!useShortcut(accelerator)) {
+    useShortcut(keysWindow ? "" : settings.shortcut);  // 窗口开着时先不注册旧的，免得在窗口里按到它
+    return { ok: false, message: `${showKeys(accelerator)} 被别的软件占了，换一个吧` };
+  }
+  settings.shortcut = accelerator;
+  saveSettings();
+  refreshTray();
+  return { ok: true, current: accelerator };
+}
+function openShortcut() {
+  if (keysWindow) return keysWindow.focus();
+  useShortcut("");  // 设的时候先放开，按到旧的组合不会叫她出来
+  keysWindow = new BrowserWindow({
+    width: 460, height: 360, title: "和她说话的快捷键", icon: ICON, autoHideMenuBar: true, resizable: false,
+    webPreferences: { preload: path.join(__dirname, "shortcut-preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  keysWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  keysWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  keysWindow.on("closed", () => { keysWindow = null; if (shortcutOn !== settings.shortcut) useShortcut(settings.shortcut); });
+  keysWindow.loadFile(path.join(__dirname, "shortcut.html"));
+}
+const fromKeys = (event) => keysWindow && event.sender === keysWindow.webContents;
+ipcMain.handle("atri:shortcut:current", (event) => (fromKeys(event) ? { current: settings.shortcut, default: DEFAULT_SHORTCUT } : null));
+ipcMain.handle("atri:shortcut:save", (event, accelerator) => (fromKeys(event) ? saveShortcut(accelerator) : { ok: false, message: "不认识的请求" }));
 
 // ---- 页面发来的请求：只认桌宠窗口里、服务器那个来源的页面 ----
 const fromPet = (event) => pet && event.sender === pet.webContents && sameOrigin(event.senderFrame?.url || "");
@@ -525,7 +567,7 @@ async function act(action) {
 // ---- 托盘和右键菜单 ----
 function menuItems() {
   const items = [
-    { label: "和她说话", accelerator: SHORTCUT, click: talk },
+    { label: "和她说话", ...(settings.shortcut ? { accelerator: settings.shortcut } : {}), click: talk },
     { label: "打开聊天窗口", click: openChat },
     { label: "语音对话", type: "checkbox", checked: voiceOn, click: (item) => setVoice(item.checked) },
     { label: "念出她的话", type: "checkbox", checked: settings.speak, click: (item) => setSpeak(item.checked) },
@@ -555,6 +597,7 @@ function menuItems() {
     { type: "separator" },
     { label: pet?.isVisible() ? "藏起来" : "叫她出来", click: () => { if (pet?.isVisible()) pet.hide(); else showPet(); refreshTray(); } },
     { label: "重新连接", click: () => { if (pet) pet.loadURL(`${origin()}/atri/pet`); else showPet(); } },
+    { label: `快捷键（现在：${showKeys(settings.shortcut)}）…`, click: openShortcut },
     { label: "服务器地址…", click: openSetup },
     updateReady
       ? { label: `重启并更新到 ${updateReady}`, click: () => autoUpdater.quitAndInstall() }
@@ -624,14 +667,23 @@ if (!app.requestSingleInstanceLock()) {
     guardPermissions();
     createTray();
     if (settings.server) createPet(); else openSetup();
-    if (!globalShortcut.register(SHORTCUT, talk)) log("shortcut taken", SHORTCUT);
+    if (!useShortcut(settings.shortcut)) {  // 被别的软件占了（比如 QQ 截图也是 Ctrl+Alt+A）：告诉用户去换
+      log("shortcut taken", settings.shortcut);
+      if (Notification.isSupported()) {
+        const note = new Notification({ title: `快捷键 ${showKeys(settings.shortcut)} 被别的软件占了`, body: "点这里换一个（托盘菜单里的“快捷键…”）", icon: ICON });
+        note.on("click", openShortcut);
+        note.show();
+      }
+    }
     setupUpdater();
     powerMonitor.on("lock-screen", () => { locked = true; endControl("锁屏了，她先停下了"); });
     powerMonitor.on("unlock-screen", () => { locked = false; });
     if (process.env.ATRI_SMOKE) {  // 冒烟测试用
       global.atriSmoke = {
         setWatching: (on) => setWatching(on, { asked: false }), setVoice, setSpeak, setComputer: (on) => setComputer(on, { asked: false }),
-        state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes, computer: settings.computer, controlling: Boolean(control), overlay: Boolean(overlay) }),
+        setShortcut: saveShortcut, openShortcut,
+        state: () => ({ watching, voiceOn, speak: settings.speak, shownNotes, computer: settings.computer, controlling: Boolean(control), overlay: Boolean(overlay),
+          shortcut: settings.shortcut, shortcutOn, shortcutRegistered: shortcutOn ? globalShortcut.isRegistered(shortcutOn) : false }),
       };
     }
     screen.on("display-removed", () => {

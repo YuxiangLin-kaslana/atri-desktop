@@ -169,6 +169,34 @@ async function waitFor(check, what, timeout = 20000) {
     await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
     await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).shownNotes === 1, "藏起来时弹通知");
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).showInactive());
+    // 10b. 快捷键：默认 Ctrl+Alt+A；能换（旧的放开）、能不用；认不出来的、被占了的不收；设置窗口打得开
+    const keys = () => app.evaluate(() => global.atriSmoke.state());
+    assert.equal((await keys()).shortcut, "Control+Alt+A");
+    console.log("快捷键：", JSON.stringify(await keys()));
+    assert.deepEqual(await app.evaluate(() => global.atriSmoke.setShortcut("Control+Alt+Q")), { ok: true, current: "Control+Alt+Q" });
+    assert.equal((await keys()).shortcutRegistered, true);
+    assert.equal(await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered("Control+Alt+A")), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).shortcut, "Control+Alt+Q");
+    assert.equal((await app.evaluate(() => global.atriSmoke.setShortcut("rm -rf"))).ok, false);
+    assert.equal((await keys()).shortcutOn, "Control+Alt+Q");  // 没换成就还是原来的
+    await app.evaluate(({ globalShortcut }) => globalShortcut.register("Control+Alt+F7", () => {}));  // 假装别的软件占了
+    assert.match((await app.evaluate(() => global.atriSmoke.setShortcut("Control+Alt+F7"))).message, /被别的软件占了/);
+    assert.equal((await keys()).shortcutOn, "Control+Alt+Q");
+    assert.deepEqual(await app.evaluate(() => global.atriSmoke.setShortcut("")), { ok: true, current: "" });
+    assert.equal((await keys()).shortcutOn, "");
+    await app.evaluate(() => global.atriSmoke.openShortcut());
+    const keysPage = await waitFor(async () => app.windows().find((page) => page.url().endsWith("shortcut.html")), "快捷键窗口");
+    await keysPage.waitForLoadState();
+    assert.deepEqual(await keysPage.evaluate(() => window.atriShortcut.current()), { current: "", default: "Control+Alt+A" });
+    await keysPage.locator("#keys").focus();
+    await keysPage.keyboard.press("Control+Alt+K");
+    assert.equal(await keysPage.locator("#keys").textContent(), "Ctrl+Alt+K");
+    await keysPage.locator("#save").click();
+    await waitFor(async () => (await keys()).shortcut === "Control+Alt+K", "在窗口里换成 Ctrl+Alt+K");
+    await keysPage.locator("#reset").click();
+    await waitFor(async () => (await keys()).shortcut === "Control+Alt+A", "恢复默认");
+    await keysPage.close();
+    await waitFor(async () => (await keys()).shortcutRegistered === true, "关窗口后注册上");
     // 11. 用电脑（手 B）：没允许、没开始时做不了；允许后开始，截图、点测试窗口里的输入框、打中文、全选重写；结束后标记消失
     assert.equal(await pet.evaluate(() => window.atriDesktop.computerState().then((state) => state.allowed)), false);
     assert.ok((await pet.evaluate(() => window.atriDesktop.computerAct({ type: "type", text: "x" }))).error, "没开始不能动");
