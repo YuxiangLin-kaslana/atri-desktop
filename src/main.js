@@ -622,7 +622,7 @@ function refreshTray() {
   if (tray) tray.setContextMenu(Menu.buildFromTemplate(menuItems()));
 }
 function createTray() {
-  tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, "assets", "tray.png")));  // 16 像素单独画的（高分屏用 tray@2x.png）
   tray.setToolTip("ATRI");
   tray.on("click", () => { if (pet?.isVisible()) talk(); else showPet(); });
   refreshTray();

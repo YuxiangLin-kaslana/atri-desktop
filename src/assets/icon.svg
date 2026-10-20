@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- ATRI 的图标：折面的 A（蓝、紫两笔，横杠是一片浅蓝的叶子）。各尺寸的 PNG 由 deploy/atri/make-icons.py 从这里生成 -->
+  <polygon points="78,450 196,450 296,176 250,62" fill="#2357D9"/>
+  <polygon points="146,62 318,62 450,450 334,450 276,190 236,106" fill="#A64FC6"/>
+  <path d="M142 356 C208 276, 330 266, 394 300 C332 370, 220 392, 142 356 Z" fill="#3AA0F0"/>
+</svg>
