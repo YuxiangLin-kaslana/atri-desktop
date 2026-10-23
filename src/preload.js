@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("atriDesktop", {
   setMoveMode: (on) => ipcRenderer.send("atri:move:set", Boolean(on)),
   onWatching: (handler) => ipcRenderer.on("atri:watching", (_event, on) => handler(Boolean(on))),
   voiceOff: () => ipcRenderer.send("atri:voiceOff"),
+  setSpeak: (on) => ipcRenderer.send("atri:speak:set", Boolean(on)),  // 桌宠上的静音按钮（false = 静音），菜单里的“静音”跟着变
   notify: (title, body) => ipcRenderer.send("atri:notify", String(title ?? ""), String(body ?? "")),  // 她被藏起来时弹系统通知
   // 用电脑（手 B）：允许与否只能在菜单里改；页面拿任务、开始、看屏幕、做一步、结束
   computerState: () => ipcRenderer.invoke("atri:computer:state"),

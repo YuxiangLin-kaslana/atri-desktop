@@ -161,6 +161,12 @@ async function waitFor(check, what, timeout = 20000) {
     await app.evaluate(() => global.atriSmoke.setSpeak(false));
     await waitFor(() => pet.evaluate(() => window.commands.includes("speak:off")), "页面收到 speak:off");
     assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).speak, false);
+    // 9a. 桌宠上的静音按钮：页面让桌面端打开声音，菜单和设置跟着变，页面收到 speak:on
+    const speakOns = await pet.evaluate(() => window.commands.filter((each) => each === "speak:on").length);
+    await pet.evaluate(() => window.atriDesktop.setSpeak(true));
+    await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).speak === true, "页面上取消静音");
+    await waitFor(() => pet.evaluate((before) => window.commands.filter((each) => each === "speak:on").length > before, speakOns), "页面收到 speak:on");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, "settings.json"), "utf8")).speak, true);
     // 10. 系统通知：她在桌面上时不弹（气泡就够了），藏起来才弹
     await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
     await new Promise((done) => setTimeout(done, 300));
@@ -168,7 +174,9 @@ async function waitFor(check, what, timeout = 20000) {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).hide());
     await pet.evaluate(() => window.atriDesktop.notify("ATRI 提醒你", "喝水"));
     await waitFor(async () => (await app.evaluate(() => global.atriSmoke.state())).shownNotes === 1, "藏起来时弹通知");
+    await waitFor(() => pet.evaluate(() => window.commands.includes("hidden:on")), "藏起来时页面收到 hidden:on（不出声）");
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().endsWith("/atri/pet")).showInactive());
+    await waitFor(() => pet.evaluate(() => window.commands.includes("hidden:off")), "叫出来时页面收到 hidden:off");
     // 10a. 移动桌宠：默认关（平时拖不动）；托盘里打开，页面收到 move:on；页面上点“完成”就关掉
     assert.equal(await pet.evaluate(() => window.atriDesktop.moveMode()), false);
     await app.evaluate(() => global.atriSmoke.setMoving(true));

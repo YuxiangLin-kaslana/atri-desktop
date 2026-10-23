@@ -115,9 +115,11 @@ function createPet() {
     dialog.showMessageBox({ type: "warning", title: "ATRI", message: `连不上 ATRI 服务器（${reason}）`, detail: `地址：${settings.server}\n可以在托盘菜单里改服务器地址，或者稍后点“重新连接”。` });
   });
   pet.once("ready-to-show", () => { if (!isLogin(pet.webContents.getURL())) pet.showInactive(); });  // 被转到登录页时不显示
-  pet.on("show", refreshTray);
+  // 藏起来、叫出来都告诉页面：藏起来时她不出声、不随口说话（页面的可见性接口因为关了后台节流，一直是“可见”）
+  pet.on("show", () => { refreshTray(); pet?.webContents.send("atri:command", "hidden:off"); });
   pet.on("hide", () => {  // 藏起来就看不到“在看屏幕”“在听”的标记了：一起关掉
     refreshTray();
+    pet?.webContents.send("atri:command", "hidden:on");
     if (watching) setWatching(false);
     if (voiceOn) setVoice(false);
   });
@@ -280,6 +282,7 @@ ipcMain.on("atri:ready", (event, info) => {
   if (updateReady) pet.webContents.send("atri:command", `say:新版本 ${updateReady} 已经下好了，退出时会自动装上。`);
   pet.webContents.send("atri:watching", watching);  // 页面重新加载过：告诉它现在看没看、念不念、听不听
   pet.webContents.send("atri:command", settings.speak ? "speak:on" : "speak:off");
+  pet.webContents.send("atri:command", pet.isVisible() ? "hidden:off" : "hidden:on");
   pet.webContents.send("atri:computer", { allowed: settings.computer });
   if (voiceOn) pet.webContents.send("atri:command", "voice:on");
 });
@@ -384,6 +387,7 @@ function setMoving(on) {
 }
 ipcMain.handle("atri:move:state", (event) => (fromPet(event) ? moving : false));
 ipcMain.on("atri:move:set", (event, on) => { if (fromPet(event)) setMoving(on); });
+ipcMain.on("atri:speak:set", (event, on) => { if (fromPet(event)) setSpeak(on); });  // 桌宠上的静音按钮：和菜单里的“静音”是同一个
 function setSpeak(on) {
   settings.speak = Boolean(on);
   saveSettings();
@@ -580,7 +584,7 @@ function menuItems() {
     { label: "移动桌宠（拖动、滚轮调大小）", type: "checkbox", checked: moving, click: (item) => setMoving(item.checked) },
     { label: "打开聊天窗口", click: openChat },
     { label: "语音对话", type: "checkbox", checked: voiceOn, click: (item) => setVoice(item.checked) },
-    { label: "念出她的话", type: "checkbox", checked: settings.speak, click: (item) => setSpeak(item.checked) },
+    { label: "静音", type: "checkbox", checked: !settings.speak, click: (item) => setSpeak(!item.checked) },
     { label: "让她看屏幕", type: "checkbox", checked: watching, click: (item) => setWatching(item.checked) },
     { label: "允许她用电脑", type: "checkbox", checked: settings.computer, visible: process.platform === "win32" || Boolean(process.env.ATRI_SMOKE),
       click: (item) => setComputer(item.checked) },
